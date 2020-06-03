@@ -1,0 +1,6 @@
+POST http://localhost:3030/container/static-site/top
+content-type: application/json
+
+{
+    "ps_args": "ax"
+}

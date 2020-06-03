@@ -9,18 +9,21 @@ use std::{
 };
 
 extern crate common;
-use broker_proto::Protocol;
 
 //use serde_json::Value;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use structopt::StructOpt;
-use tracing::{error, info};
 #[allow(unused_imports)]
 use tokio::prelude::*;
 
 mod security;
 mod quic;
+
+#[path = "./options/mod.rs"]
 mod options;
+
+#[macro_use]
+extern crate lazy_static;
 
 extern crate serde;
 #[macro_use]
@@ -34,11 +37,17 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use rmps::{Deserializer, Serializer};
 
+use broker_proto::bl;
+
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Human {
     age: u32,
     name: String,
     gender: Option<String>,
+}
+
+lazy_static! {
+    static ref OPT: options::Opt = options::Opt::from_args();
 }
 
 fn main() {
@@ -48,9 +57,13 @@ fn main() {
         .finish(),
     ).unwrap();
 
-    let opt = options::Opt::from_args();
+    let lco =  None::<bl::ListContainersOptions<String>>;
+
+    let list_load = serde_json::to_string_pretty(&lco).unwrap();
+    println!("{}", list_load);
+   
     let code = {
-        if let Err(e) = run(&opt) {
+        if let Err(e) = run() {
             eprintln!("ERROR: {}", e);
             1
         } else {
@@ -61,112 +74,269 @@ fn main() {
     std::process::exit(code);
 }
 
+use warp::Filter;
+use warp::path::path;
+use warp::path::param;
+use warp::body::json;
+
 #[tokio::main]
-async fn run(options: &options::Opt) -> Result<()> {
-    let mut endpoint = quinn::Endpoint::builder();
-    let mut client_config = quinn::ClientConfigBuilder::default();
-    client_config.protocols(common::ALPN_QUIC_HTTP);
+async fn run() -> Result<()> {
+    let list = path("list")
+        .and(json())
+        .and_then(list);
 
-    if options.keylog {
-        client_config.enable_keylog();
-    }
+    let inspect = param::<String>()
+        .and(path("inspect"))    
+        .and(json())
+        .and_then(inspect);
 
-    security::setup_security(&mut client_config, &options.ca)?;
+    let prune = path("prune")
+        .and(json())
+        .and_then(prune);
 
-    /*
-    if let Some(ca_path) = options.ca {
-        client_config
-            .add_certificate_authority(quinn::Certificate::from_der(&fs::read(&ca_path)?)?)?;
-    } else {
-        let dirs = directories::ProjectDirs::from("arg", "quinn", "quinn-examples").unwrap();
-        match fs::read(dirs.data_local_dir().join("cert.der")) {
-            Ok(cert) => {
-                client_config.add_certificate_authority(quinn::Certificate::from_der(&cert)?)?;
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
-                info!("Local server certificate not found");
-            },
-            Err(e) => {
-                error!("Failed to open local server certificate: {}", e);
-            }
-        }
-    }
-    */
+    let create = path("create")
+        .and(json())
+        .and(json())
+        .and_then(create);
 
-    endpoint.default_client_config(client_config.build());
+    let change = param::<String>()
+        .and(path("change"))
+        .and_then(change);
 
-    let (endpoint, _) = endpoint.bind(&"0.0.0.0:0".parse()?)?;
+    let logs = param::<String>()
+        .and(path("logs"))
+        .and(json())
+        .and_then(logs);
 
-    let test = broker_proto::Protocol::list().await?;
-    let mut buf = Vec::new();
-
-    test.serialize(&mut Serializer::new(&mut buf))?;
-
-    let start = Instant::now();
-    //let rebind = options.rebind;
-    let host = options
-        .host
-        .as_str();
+    let stats = param::<String>()
+        .and(path("stats"))
+        .and(json())
+        .and_then(stats);
     
-    let new_conn = endpoint
-        .connect(&options.server, &host)?
-        .await
-        .map_err(|e| anyhow!("Failed to connect: {}", e))?;
-    
-    eprintln!("Connected as {:?}", start.elapsed());
+    let stop = param::<String>()
+        .and(path("stop"))
+        .and(json())
+        .and_then(stop);
 
-    let quinn::NewConnection {
-        connection: conn, ..
-    } = {new_conn};
+    let start = param::<String>()
+        .and(path("start"))
+        .and(json())
+        .and_then(start);
 
-    let (mut send, recv) = conn
-        .open_bi()
-        .await
-        .map_err(|e| anyhow!("Failed to open stream: {}", e))?;
+    let kill = param::<String>()
+        .and(path("kill"))
+        .and(json())
+        .and_then(kill);
 
-    if options.rebind {
-        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
-        let addr = socket.local_addr().unwrap();
-        eprintln!("Rebinding to {}", addr);
-        endpoint.rebind(socket).expect("Rebind failed");
-    }
+    let restart = param::<String>()
+        .and(path("restart"))
+        .and(json())
+        .and_then(restart);
 
-    send.write_all(&test.bytes().unwrap())
-        .await
-        .map_err(|e| anyhow!("Failed to send request: {}", e))?;
+    let top = param::<String>()
+        .and(path("top"))
+        .and(json())
+        .and_then(top);
 
-    send.finish()
-        .await
-        .map_err(|e| anyhow!("Failed to shutdown stream: {}", e))?;
+    let remove = param::<String>()
+        .and(path("remove"))
+        .and(json())
+        .and_then(remove);
 
-    let response_start = Instant::now();
-    eprintln!("Request sent at {:?}", response_start - start);
+    let update = param::<String>()
+        .and(path("update"))
+        .and(json())
+        .and_then(update);
 
-    let resp = recv
-        .read_to_end(usize::max_value())
-        .await
-        .map_err(|e| anyhow!("Failed to read response: {}", e))?;
+    let promote = warp::post().and(path("container").and(inspect.or(create)
+        .or(change).or(logs).or(stats).or(stop).or(start).or(kill).or(restart).or(top).or(remove).or(update).or(list).or(prune)));
 
-    
-    let duration = response_start.elapsed();
-    eprintln!(
-        "Response received in {:?} - {} KiB/s",
-        duration,
-        resp.len() as f32 / (duration_secs(&duration) * 1024.0)
-    );
-
-    use std::convert::TryFrom;
-    let test: Protocol = broker_proto::Protocol::try_from(&resp[..])?;
-    let tmp = format!("{:#?}", test);
-    
-    
-    io::stdout().write_all(tmp.as_bytes()).unwrap();
-    io::stdout().flush().unwrap();
-    conn.close(0u32.into(), b"done");
-
+    warp::serve(promote).run(([127, 0, 0, 1], 3030)).await;
     Ok(())
 }
 
-fn duration_secs(x: &Duration) -> f32 {
-    x.as_secs() as f32 + x.subsec_nanos() as f32 * 1e-9
+use broker_proto::Protocol;
+use std::convert::Infallible;
+use warp::reply::Json;
+
+async fn list(opt: Option<bl::ListContainersOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::list_opt(opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn inspect(name: String, opt: Option<bl::InspectContainerOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::inspect_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn prune(opt: Option<bl::PruneContainersOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::prune_opt(opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn create(config: bl::Config<String>, opt: Option<bl::CreateContainerOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::create_opt(config, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn change(name: String) -> Result<Json, Infallible> {
+    let proto = Protocol::change_opt(&name).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn logs(name: String, opt: Option<bl::LogsOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::logs_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn stats(name: String, opt: Option<bl::StatsOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::stats_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn stop(name: String, opt: Option<bl::StopContainerOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::stop_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn start(name: String, opt: Option<bl::StartContainerOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::start_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn kill(name: String, opt: Option<bl::KillContainerOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::kill_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn restart(name: String, opt: Option<bl::RestartContainerOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::restart_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn top(name: String, opt: Option<bl::TopOptions<String>>) -> Result<Json, Infallible> {
+    let proto = Protocol::top_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn remove(name: String, opt: Option<bl::RemoveContainerOptions>) -> Result<Json, Infallible> {
+    let proto = Protocol::remove_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
+}
+
+async fn update(name: String, opt: bl::UpdateContainerOptions) -> Result<Json, Infallible> {
+    let proto = Protocol::update_opt(&name, opt).await;
+    if let Err(_) = proto {
+        return Ok(warp::reply::json(&Protocol::error_none("error")));
+    }
+
+    let resp = quic::handle_request(&OPT, proto.unwrap()).await;
+    if let Err(_) = resp {
+        return Ok(warp::reply::json(&Protocol::error_none("error2")));
+    }
+    Ok(warp::reply::json(&resp.unwrap()))
 }

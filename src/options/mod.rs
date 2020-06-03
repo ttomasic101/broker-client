@@ -4,7 +4,7 @@ use std::{
     path::PathBuf
 };
 
-#[derive(StructOpt, Debug)]
+#[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "client")]
 pub struct Opt {
 

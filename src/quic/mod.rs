@@ -9,13 +9,11 @@ use std::{
     time::{Instant, Duration},
 };
 
-#[path = "../options/mod.rs"]
-mod options;
+use super::options;
 
-#[path = "../security/mod.rs"]
-mod security;
+use super::security;
 
-pub async fn handle_request(options: &options::Opt, data: Vec<u8>) -> Result<Vec<u8>> {
+pub async fn handle_request(options: &options::Opt, request: Protocol) -> Result<Protocol> {
 
     let mut endpoint = quinn::Endpoint::builder();
     let mut client_config = quinn::ClientConfigBuilder::default();
@@ -30,9 +28,6 @@ pub async fn handle_request(options: &options::Opt, data: Vec<u8>) -> Result<Vec
     endpoint.default_client_config(client_config.build());
 
     let (endpoint, _) = endpoint.bind(&"0.0.0.0:0".parse()?)?;
-
-    use std::convert::TryFrom;
-    let request: Protocol = broker_proto::Protocol::try_from(&data[..])?;
     //let tmp = format!("{:#?}", test);
 
     let start = Instant::now();
@@ -92,12 +87,12 @@ pub async fn handle_request(options: &options::Opt, data: Vec<u8>) -> Result<Vec
         resp.len() as f32 / (duration_secs(&duration) * 1024.0)
     );
 
+    conn.close(0u32.into(), b"done");
+
+    use std::convert::TryFrom;
     let test: Protocol = broker_proto::Protocol::try_from(&resp[..])?;
 
-    let mut buf = Vec::new();
-    test.serialize(&mut Serializer::new(&mut buf))?;
-
-    Ok(buf)
+    Ok(test)
 }
 
 fn duration_secs(x: &Duration) -> f32 {
